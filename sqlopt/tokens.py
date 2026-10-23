@@ -3,7 +3,7 @@ from enum import Enum, auto
 
 
 class TokenType(Enum):
-    SELECT = auto(); FROM = auto(); WHERE = auto(); AND = auto(); OR = auto()
+    SELECT = auto(); DISTINCT = auto(); FROM = auto(); WHERE = auto(); AND = auto(); OR = auto()
     ORDER = auto(); BY = auto(); ASC = auto(); DESC = auto(); JOIN = auto(); INNER = auto(); ON = auto()
     IDENTIFIER = auto(); NUMBER = auto(); STRING = auto()
     COMMA = auto(); STAR = auto(); EQ = auto(); NEQ = auto(); LT = auto(); GT = auto()

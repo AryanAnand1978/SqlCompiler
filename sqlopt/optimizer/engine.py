@@ -5,9 +5,15 @@ from ..ast_nodes import ASTNode
 from ..utils.relalg_printer import to_relalg_string
 from ..utils.sql_printer import ast_to_sql
 from .rule_metadata import RULE_INFO
-from .rules import constant_folding, predicate_pushdown, projection_pushdown, redundant_filter_elimination
+from .rules import constant_folding, predicate_pushdown, projection_pushdown, redundant_filter_elimination, redundant_join_elimination
 
-_RULES = (constant_folding, predicate_pushdown, projection_pushdown, redundant_filter_elimination)
+_RULES = (
+    constant_folding,
+    redundant_join_elimination,
+    predicate_pushdown,
+    projection_pushdown,
+    redundant_filter_elimination,
+)
 
 
 @dataclass

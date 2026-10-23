@@ -1,4 +1,4 @@
-from ..ast_nodes import AndNode, ASTNode, BooleanNode, Condition, ConditionNode, FilterNode, JoinNode, OrNode, ProjectNode, ScanNode, SortNode, StringLiteral
+from ..ast_nodes import AndNode, ASTNode, BooleanNode, Condition, ConditionNode, DistinctNode, FilterNode, JoinNode, OrNode, ProjectNode, ScanNode, SortNode, StringLiteral
 
 
 def _format_operand(val: str | int) -> str:
@@ -44,12 +44,17 @@ def _render_from(node: ASTNode) -> str:
 
 def _unpack_query(node: ASTNode):
     order_by = None
+    distinct = False
     columns = None
     where_cond = None
     curr = node
 
     if isinstance(curr, SortNode):
         order_by = (curr.column, curr.direction)
+        curr = curr.child
+
+    if isinstance(curr, DistinctNode):
+        distinct = True
         curr = curr.child
 
     if isinstance(curr, ProjectNode):
@@ -61,16 +66,17 @@ def _unpack_query(node: ASTNode):
         curr = curr.child
 
     from_node = curr
-    return columns, from_node, where_cond, order_by
+    return columns, from_node, where_cond, order_by, distinct
 
 
 def ast_to_sql(node: ASTNode) -> str:
     """Render an ASTNode tree into a canonical SQL query string."""
-    columns, from_node, where_cond, order_by = _unpack_query(node)
+    columns, from_node, where_cond, order_by, distinct = _unpack_query(node)
 
     parts: list[str] = []
     col_str = ", ".join(columns) if columns else "*"
-    parts.append(f"SELECT {col_str}")
+    distinct_str = "DISTINCT " if distinct else ""
+    parts.append(f"SELECT {distinct_str}{col_str}")
 
     if from_node is not None:
         parts.append(f"FROM {_render_from(from_node)}")

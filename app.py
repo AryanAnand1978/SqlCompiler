@@ -12,14 +12,29 @@ from sqlopt.utils.sql_printer import ast_to_sql
 from sqlopt.utils.tree_printer import print_tree, print_tree_highlighted
 
 EXAMPLES = {
-    "Tautology & duplicate filter": "SELECT name, age FROM users WHERE age > 18 AND age > 18 AND 1 = 1;",
-    "NULL-sensitive & duplicate predicate": "SELECT name, age FROM users WHERE age > 18 AND age > 18 AND 1 = 1 AND name = name;",
-    "Duplicate active & sort": "SELECT name, city FROM users WHERE active = 1 AND active = 1 AND age > 18 ORDER BY name ASC;",
-    "Adult users": "SELECT name, age FROM users WHERE age > 18 ORDER BY age DESC;",
-    "Optimized query": "SELECT name FROM users WHERE age > 18 AND 1=1;",
-    "Shipped orders": "SELECT id, amount FROM orders WHERE status = 'shipped' ORDER BY id DESC;",
-    "Duplicate predicate": "SELECT name FROM users WHERE age > 18 AND age > 18;",
-    "Aliased join": "SELECT u.name, o.amount FROM users u JOIN orders o ON u.id = o.user_id WHERE u.age > 18 AND o.status = 'shipped' AND 1 = 1 AND u.age > 18;",
+    # 1. Joins & Multi-Table Relations
+    "Join: Redundant Self-Join Elimination (Join Pruning)": "SELECT u.name, o.amount FROM users u JOIN orders o ON u.id = o.user_id JOIN users u2 ON u.id = u2.id WHERE o.status = 'shipped';",
+    "Join: Employees & Departments (Filtered + Sorted)": "SELECT e.name, d.dept_name, e.salary FROM employees e JOIN departments d ON e.dept_id = d.id WHERE e.salary > 60000 ORDER BY e.salary DESC;",
+    "Join: All Rules Fired (Join + Tautology + Duplicates + Projection)": "SELECT e.name, d.dept_name, e.salary FROM employees e JOIN departments d ON e.dept_id = d.id WHERE e.salary > 50000 AND 1 = 1 AND e.salary > 50000 ORDER BY e.salary DESC;",
+    "Join: Users & Orders (Status filter + Tautology)": "SELECT u.name, o.amount FROM users u JOIN orders o ON u.id = o.user_id WHERE u.age > 18 AND o.status = 'shipped' AND 1 = 1 AND u.age > 18;",
+
+    # 2. Edge Cases in Boolean Predicates & Constant Folding
+    "Edge Case: Duplicate Elimination (SELECT DISTINCT)": "SELECT DISTINCT city FROM users WHERE active = 1 AND active = 1;",
+    "Edge Case: Contradiction / Dead Predicate (1 = 0)": "SELECT name, price FROM products WHERE price > 1000 AND 1 = 0;",
+    "Edge Case: Tautology Elimination (1 = 1)": "SELECT name, age FROM users WHERE age > 18 AND age > 18 AND 1 = 1;",
+    "Edge Case: Duplicate Filter Deduplication (c ∧ c = c)": "SELECT name, age FROM users WHERE age > 18 AND age > 18;",
+    "Edge Case: Self-Comparison (name = name)": "SELECT name, age FROM users WHERE age > 18 AND age > 18 AND 1 = 1 AND name = name;",
+    "Edge Case: Disjunction / OR Predicates": "SELECT name, category, price FROM products WHERE category = 'Books' OR category = 'Furniture' ORDER BY price ASC;",
+
+    # 3. Projection Pushdown & I/O Reduction Edge Cases
+    "Edge Case: Massive Projection Pushdown (1 of 5 columns)": "SELECT name FROM products;",
+    "Edge Case: Wildcard (SELECT *) — Proves Pushdown is Safely Skipped": "SELECT * FROM products WHERE stock > 0;",
+    "Edge Case: Filtered Column Not in SELECT List": "SELECT name FROM products WHERE price > 5000;",
+
+    # 4. Sorting & Filter Queries
+    "Sort: Products by Price Descending": "SELECT name, category, price FROM products WHERE stock > 0 ORDER BY price DESC;",
+    "Sort: Shipped Orders by Amount": "SELECT id, user_id, amount FROM orders WHERE status = 'shipped' ORDER BY amount DESC;",
+    "Filter: Adult Active Users": "SELECT name, city, age FROM users WHERE active = 1 AND age >= 18 ORDER BY age ASC;",
 }
 
 st.set_page_config(page_title="SQL Optimizer", page_icon="⚡", layout="wide")
@@ -37,7 +52,7 @@ sql = st.text_area("SQL query", value=st.session_state.get("sql", EXAMPLES[selec
 with st.expander("📖 Grammar (EBNF), Supported Syntax, and Demo Catalog"):
     st.markdown("### Grammar (EBNF)")
     st.code(
-        """query        := "SELECT" column_list "FROM" table_name [alias] [join_clause]* [where_clause] [order_clause] ";"
+        """query        := "SELECT" ["DISTINCT"] column_list "FROM" table_name [alias] [join_clause]* [where_clause] [order_clause] ";"
 column_list  := "*" | column ("," column)*
 column       := IDENTIFIER ["." IDENTIFIER]
 table_name   := IDENTIFIER
@@ -52,10 +67,18 @@ order_clause := "ORDER" "BY" column ["ASC" | "DESC"]""",
         language="text",
     )
     st.markdown("### Supported Syntax Summary")
-    st.code("SELECT column[, ...] | * FROM table [alias] [INNER] JOIN table [alias] ON comparison [WHERE comparison (AND|OR comparison)*] [ORDER BY column ASC|DESC];", language="sql")
+    st.code("SELECT [DISTINCT] column[, ...] | * FROM table [alias] [INNER] JOIN table [alias] ON comparison [WHERE comparison (AND|OR comparison)*] [ORDER BY column ASC|DESC];", language="sql")
     st.markdown("### Demo Database Catalog")
-    st.write("Tables: `users` (`id`, `name`, `age`, `city`, `active`) and `orders` (`id`, `user_id`, `status`, `amount`).")
-    st.dataframe([{ "table": name, "rows": len(rows)} for name, rows in TABLES.items()], hide_index=True)
+    st.write("The database catalog includes **5 tables** with varying schemas and record sizes:")
+    catalog_rows = [
+        {
+            "Table": name,
+            "Rows": len(rows),
+            "Columns": ", ".join(rows[0].keys()),
+        }
+        for name, rows in TABLES.items()
+    ]
+    st.dataframe(catalog_rows, hide_index=True, use_container_width=True)
 
 # Run Controls
 btn_c1, btn_c2 = st.columns([1, 1])

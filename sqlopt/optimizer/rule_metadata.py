@@ -11,6 +11,10 @@ RULE_INFO = {
         "display_name": "Predicate Pushdown",
         "identity": r"σ_C(R ⋈ S) = σ_C1(R) ⋈ σ_C2(S)   — selection pushdown through join",
     },
+    "redundant_join_elimination": {
+        "display_name": "Redundant Join Elimination",
+        "identity": r"R ⋈_(R.id = S.id) S = R   — redundant self-join pruning",
+    },
     "projection_pushdown": {
         "display_name": "Projection Pushdown",
         "identity": r"π_A(σ_c(R)) ⟶ only required columns retained at scan",

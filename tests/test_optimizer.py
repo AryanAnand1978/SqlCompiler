@@ -29,3 +29,26 @@ def test_optimizer_reports_rules_and_marks_required_scan_columns():
     optimized, applied = optimize(original)
     assert applied == ["projection_pushdown (1x)", "redundant_filter_elimination (1x)"]
     assert optimized == ProjectNode(("name",), FilterNode(age, ScanNode("users", ("age", "name"))))
+
+
+def test_redundant_self_join_elimination():
+    from sqlopt.lexer import Lexer
+    from sqlopt.parser import Parser
+    from sqlopt.utils.sql_printer import ast_to_sql
+
+    query = (
+        "SELECT u.name, o.amount FROM users u "
+        "JOIN orders o ON u.id = o.user_id "
+        "JOIN users u2 ON u.id = u2.id "
+        "WHERE o.status = 'shipped';"
+    )
+    ast = Parser(Lexer(query).tokenize()).parse()
+    optimized, rules = optimize(ast)
+    assert any("redundant_join_elimination" in r for r in rules)
+    expected_sql = (
+        "SELECT u.name, o.amount FROM users u "
+        "JOIN orders o ON u.id = o.user_id "
+        "WHERE o.status = 'shipped';"
+    )
+    assert ast_to_sql(optimized) == expected_sql
+

@@ -1,6 +1,6 @@
 from dataclasses import replace
 from typing import Any
-from ..ast_nodes import AndNode, ASTNode, BooleanNode, Condition, ConditionNode, FilterNode, JoinNode, OrNode, ProjectNode, ScanNode, SortNode, StringLiteral
+from ..ast_nodes import AndNode, ASTNode, BooleanNode, Condition, ConditionNode, DistinctNode, FilterNode, JoinNode, OrNode, ProjectNode, ScanNode, SortNode, StringLiteral
 
 
 class RuleResult(tuple):
@@ -42,6 +42,7 @@ def _rewrite_children(node: ASTNode, transform):
     if isinstance(node, FilterNode): return replace(node, child=transform(node.child))
     if isinstance(node, ProjectNode): return replace(node, child=transform(node.child))
     if isinstance(node, SortNode): return replace(node, child=transform(node.child))
+    if isinstance(node, DistinctNode): return replace(node, child=transform(node.child))
     if isinstance(node, JoinNode): return replace(node, left=transform(node.left), right=transform(node.right))
     return node
 
@@ -116,6 +117,97 @@ def predicate_pushdown(node: ASTNode) -> RuleResult:
     return RuleResult(node, False, None)
 
 
+def _collect_scans(node: ASTNode) -> dict[str, ScanNode]:
+    scans: dict[str, ScanNode] = {}
+    if isinstance(node, ScanNode):
+        key = node.alias if node.alias else node.table
+        scans[key] = node
+    elif isinstance(node, JoinNode):
+        scans.update(_collect_scans(node.left))
+        scans.update(_collect_scans(node.right))
+    elif hasattr(node, "child"):
+        scans.update(_collect_scans(getattr(node, "child")))
+    return scans
+
+
+def _collect_used_prefixes(node: ASTNode, skip_node_id: int | None = None) -> set[str]:
+    used: set[str] = set()
+
+    def _extract_prefixes(condition: Condition):
+        if isinstance(condition, ConditionNode):
+            for side in (condition.left, condition.right):
+                if isinstance(side, str) and not isinstance(side, StringLiteral) and "." in side:
+                    used.add(side.split(".")[0])
+        elif isinstance(condition, (AndNode, OrNode)):
+            _extract_prefixes(condition.left)
+            _extract_prefixes(condition.right)
+
+    def _walk(curr: ASTNode):
+        if isinstance(curr, ProjectNode):
+            for col in curr.columns:
+                if "." in col:
+                    used.add(col.split(".")[0])
+            _walk(curr.child)
+        elif isinstance(curr, FilterNode):
+            _extract_prefixes(curr.condition)
+            _walk(curr.child)
+        elif isinstance(curr, SortNode):
+            if "." in curr.column:
+                used.add(curr.column.split(".")[0])
+            _walk(curr.child)
+        elif isinstance(curr, DistinctNode):
+            _walk(curr.child)
+        elif isinstance(curr, JoinNode):
+            if curr.node_id != skip_node_id:
+                _extract_prefixes(curr.condition)
+            _walk(curr.left)
+            _walk(curr.right)
+
+    _walk(node)
+    return used
+
+
+def redundant_join_elimination(node: ASTNode) -> RuleResult:
+    """Eliminates redundant self-joins on primary key (id) when one side is unreferenced."""
+    scans = _collect_scans(node)
+    changed_id = None
+
+    def _transform(curr: ASTNode) -> ASTNode:
+        nonlocal changed_id
+        if isinstance(curr, JoinNode):
+            left = _transform(curr.left)
+            right = _transform(curr.right)
+
+            cond = curr.condition
+            if isinstance(cond, ConditionNode) and cond.op == "=":
+                l_op, r_op = str(cond.left), str(cond.right)
+                if "." in l_op and "." in r_op:
+                    l_prefix, l_col = l_op.split(".", 1)
+                    r_prefix, r_col = r_op.split(".", 1)
+                    if l_col.lower() == "id" and r_col.lower() == "id":
+                        l_scan = scans.get(l_prefix)
+                        r_scan = scans.get(r_prefix)
+                        if l_scan and r_scan and l_scan.table.lower() == r_scan.table.lower():
+                            used = _collect_used_prefixes(node, skip_node_id=curr.node_id)
+                            # Check if right branch is the redundant unreferenced scan
+                            if isinstance(right, ScanNode) and (right.alias or right.table) not in used:
+                                changed_id = curr.node_id
+                                return left
+                            # Check if left branch is the redundant unreferenced scan
+                            if isinstance(left, ScanNode) and (left.alias or left.table) not in used:
+                                changed_id = curr.node_id
+                                return right
+
+            return replace(curr, left=left, right=right)
+        elif isinstance(curr, (FilterNode, ProjectNode, SortNode, DistinctNode)):
+            return replace(curr, child=_transform(curr.child))
+        return curr
+
+    rewritten = _transform(node)
+    applied = rewritten != node
+    return RuleResult(rewritten, applied, changed_id)
+
+
 def _condition_columns(condition: Condition) -> set[str]:
     if isinstance(condition, ConditionNode):
         return {value for value in (condition.left, condition.right) if isinstance(value, str) and not isinstance(value, StringLiteral)}
@@ -135,7 +227,7 @@ def projection_pushdown(node: ASTNode) -> RuleResult:
 
 def _find_project(node: ASTNode) -> ProjectNode | None:
     if isinstance(node, ProjectNode): return node
-    if isinstance(node, (FilterNode, SortNode)): return _find_project(node.child)
+    if isinstance(node, (FilterNode, SortNode, DistinctNode)): return _find_project(node.child)
     if isinstance(node, JoinNode): return _find_project(node.left) or _find_project(node.right)
     return None
 
@@ -145,7 +237,7 @@ def _collect_required(node: ASTNode, required: set[str]) -> None:
         required.update(_condition_columns(node.condition)); _collect_required(node.child, required)
     elif isinstance(node, SortNode):
         required.add(node.column); _collect_required(node.child, required)
-    elif isinstance(node, ProjectNode): _collect_required(node.child, required)
+    elif isinstance(node, (ProjectNode, DistinctNode)): _collect_required(node.child, required)
     elif isinstance(node, JoinNode):
         required.update(_condition_columns(node.condition)); _collect_required(node.left, required); _collect_required(node.right, required)
 

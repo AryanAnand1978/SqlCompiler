@@ -10,7 +10,7 @@ class LexError(ValueError):
 
 
 _KEYWORDS = {name: TokenType[name] for name in (
-    "SELECT", "FROM", "WHERE", "AND", "OR", "ORDER", "BY", "ASC", "DESC", "JOIN", "INNER", "ON"
+    "SELECT", "DISTINCT", "FROM", "WHERE", "AND", "OR", "ORDER", "BY", "ASC", "DESC", "JOIN", "INNER", "ON"
 )}
 _SINGLE = {
     ",": TokenType.COMMA, "*": TokenType.STAR, "=": TokenType.EQ,

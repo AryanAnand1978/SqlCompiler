@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from math import log2
-from .ast_nodes import ASTNode, FilterNode, JoinNode, ProjectNode, ScanNode, SortNode
+from .ast_nodes import ASTNode, DistinctNode, FilterNode, JoinNode, ProjectNode, ScanNode, SortNode
 from .sample_data.tables import TABLE_ROW_COUNTS, TABLES
 
 TABLE_COLUMN_COUNTS = {name: len(rows[0]) for name, rows in TABLES.items()}
@@ -42,6 +42,10 @@ def generate_plan(ast: ASTNode) -> PlanNode:
     if isinstance(ast, SortNode):
         child = generate_plan(ast.child); extra = child.estimated_rows * log2(max(2.0, child.estimated_rows))
         return PlanNode("Sort", child.estimated_rows, child.estimated_cost + extra, (("column", ast.column), ("direction", ast.direction)), (child,))
+    if isinstance(ast, DistinctNode):
+        child = generate_plan(ast.child)
+        rows = max(1.0, child.estimated_rows * 0.7)
+        return PlanNode("Distinct", rows, child.estimated_cost + child.estimated_rows * 0.1, (), (child,))
     raise TypeError(f"unsupported AST node: {type(ast).__name__}")
 
 
@@ -63,6 +67,9 @@ def estimate_cost(node: ASTNode, table_row_counts: dict[str, int] | None = None)
         return max(1, int(round(child_rows * SELECTIVITY_HEURISTIC)))
     if isinstance(node, (ProjectNode, SortNode)):
         return estimate_cost(node.child, table_row_counts)
+    if isinstance(node, DistinctNode):
+        child_rows = estimate_cost(node.child, table_row_counts)
+        return max(1, int(round(child_rows * 0.7)))
     if isinstance(node, JoinNode):
         left_rows = estimate_cost(node.left, table_row_counts)
         right_rows = estimate_cost(node.right, table_row_counts)

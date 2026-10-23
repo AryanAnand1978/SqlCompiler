@@ -1,4 +1,4 @@
-from ..ast_nodes import AndNode, ASTNode, BooleanNode, Condition, ConditionNode, FilterNode, JoinNode, OrNode, ProjectNode, ScanNode, SortNode, StringLiteral
+from ..ast_nodes import AndNode, ASTNode, BooleanNode, Condition, ConditionNode, DistinctNode, FilterNode, JoinNode, OrNode, ProjectNode, ScanNode, SortNode, StringLiteral
 
 
 def _format_operand(val: str | int) -> str:
@@ -34,6 +34,9 @@ def to_relalg_string(node: ASTNode) -> str:
 
     if isinstance(node, SortNode):
         return f"τ_{{{node.column} {node.direction}}}({to_relalg_string(node.child)})"
+
+    if isinstance(node, DistinctNode):
+        return f"δ({to_relalg_string(node.child)})"
 
     if isinstance(node, JoinNode):
         cond_str = format_condition(node.condition)

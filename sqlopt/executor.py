@@ -1,6 +1,6 @@
 """In-memory executor for the v1 logical AST."""
 
-from .ast_nodes import AndNode, ASTNode, BooleanNode, ConditionNode, FilterNode, JoinNode, OrNode, ProjectNode, ScanNode, SortNode, StringLiteral
+from .ast_nodes import AndNode, ASTNode, BooleanNode, ConditionNode, DistinctNode, FilterNode, JoinNode, OrNode, ProjectNode, ScanNode, SortNode, StringLiteral
 from .sample_data.tables import TABLES
 
 
@@ -33,6 +33,16 @@ def execute(ast: ASTNode, tables: dict[str, list[dict]] | None = None) -> list[d
             return rows
         _validate_columns(ast.columns, rows)
         return [{column: row[column] for column in ast.columns} for row in rows]
+    if isinstance(ast, DistinctNode):
+        rows = execute(ast.child, tables)
+        seen = set()
+        distinct_rows = []
+        for row in rows:
+            key = tuple(row.items())
+            if key not in seen:
+                seen.add(key)
+                distinct_rows.append(row)
+        return distinct_rows
     if isinstance(ast, SortNode):
         rows = execute(ast.child, tables)
         _validate_columns((ast.column,), rows)

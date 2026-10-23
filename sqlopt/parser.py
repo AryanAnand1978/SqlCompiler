@@ -1,4 +1,4 @@
-from .ast_nodes import AndNode, ASTNode, Condition, ConditionNode, FilterNode, JoinNode, OrNode, ProjectNode, ScanNode, SortNode, StringLiteral
+from .ast_nodes import AndNode, ASTNode, Condition, ConditionNode, DistinctNode, FilterNode, JoinNode, OrNode, ProjectNode, ScanNode, SortNode, StringLiteral
 from .tokens import Token, TokenType
 
 
@@ -40,6 +40,7 @@ class Parser:
         self.depth += 1
         try:
             self.expect(TokenType.SELECT, "query must start with SELECT")
+            is_distinct = bool(self.match(TokenType.DISTINCT))
             columns = self.parse_column_list()
             self.expect(TokenType.FROM, "expected FROM after select list")
             tree: ASTNode = self.parse_table_reference()
@@ -54,6 +55,8 @@ class Parser:
             if self.match(TokenType.WHERE):
                 tree = FilterNode(self.parse_where_clause(), tree)
             tree = ProjectNode(columns, tree)
+            if is_distinct:
+                tree = DistinctNode(tree)
             if self.match(TokenType.ORDER):
                 column, direction = self.parse_order_clause()
                 tree = SortNode(column, direction, tree)

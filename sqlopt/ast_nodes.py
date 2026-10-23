@@ -78,3 +78,9 @@ class SortNode(ASTNode):
     column: str
     direction: str
     child: ASTNode
+
+
+@dataclass(frozen=True)
+class DistinctNode(ASTNode):
+    child: ASTNode
+
