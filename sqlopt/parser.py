@@ -1,4 +1,4 @@
-from .ast_nodes import AndNode, ASTNode, Condition, ConditionNode, DistinctNode, FilterNode, JoinNode, OrNode, ProjectNode, ScanNode, SortNode, StringLiteral
+from .ast_nodes import AndNode, ASTNode, Condition, ConditionNode, DistinctNode, FilterNode, JoinNode, LimitNode, OrNode, ProjectNode, ScanNode, SortNode, StringLiteral
 from .tokens import Token, TokenType
 
 
@@ -60,6 +60,13 @@ class Parser:
             if self.match(TokenType.ORDER):
                 column, direction = self.parse_order_clause()
                 tree = SortNode(column, direction, tree)
+            if self.match(TokenType.LIMIT):
+                limit_tok = self.expect(TokenType.NUMBER, "expected number after LIMIT")
+                offset = 0
+                if self.match(TokenType.OFFSET):
+                    offset_tok = self.expect(TokenType.NUMBER, "expected number after OFFSET")
+                    offset = int(offset_tok.value)
+                tree = LimitNode(int(limit_tok.value), offset, tree)
             return tree
         finally:
             self.depth -= 1
@@ -134,11 +141,26 @@ class Parser:
         finally:
             self.depth -= 1
 
-    def parse_comparison(self) -> ConditionNode:
+    def parse_comparison(self) -> Condition:
         self._log("parse_comparison", depth=self.depth)
         self.depth += 1
         try:
             left = self.parse_operand()
+            if self.match(TokenType.BETWEEN):
+                low = self.parse_operand()
+                self.expect(TokenType.AND, "expected AND in BETWEEN clause")
+                high = self.parse_operand()
+                return AndNode(ConditionNode(left, ">=", low), ConditionNode(left, "<=", high))
+            if self.match(TokenType.IN):
+                self.expect(TokenType.LPAREN, "expected '(' after IN")
+                items = [self.parse_operand()]
+                while self.match(TokenType.COMMA):
+                    items.append(self.parse_operand())
+                self.expect(TokenType.RPAREN, "expected ')' after IN list")
+                cond = ConditionNode(left, "=", items[0])
+                for item in items[1:]:
+                    cond = OrNode(cond, ConditionNode(left, "=", item))
+                return cond
             op = self.advance()
             if op.type not in _OPS:
                 raise ParseError("expected comparison operator", op)

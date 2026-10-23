@@ -1,4 +1,5 @@
-from ..ast_nodes import AndNode, ASTNode, BooleanNode, Condition, ConditionNode, DistinctNode, FilterNode, JoinNode, OrNode, ProjectNode, ScanNode, SortNode, StringLiteral
+from dataclasses import replace
+from ..ast_nodes import AndNode, ASTNode, BooleanNode, Condition, ConditionNode, DistinctNode, FilterNode, JoinNode, LimitNode, OrNode, ProjectNode, ScanNode, SortNode, StringLiteral
 
 
 def _format_operand(val: str | int) -> str:
@@ -42,12 +43,31 @@ def _render_from(node: ASTNode) -> str:
     return str(node)
 
 
+def _extract_where_conditions(from_node: ASTNode) -> tuple[ASTNode, list[Condition]]:
+    if isinstance(from_node, FilterNode):
+        cleaned_child, conds = _extract_where_conditions(from_node.child)
+        return cleaned_child, [from_node.condition] + conds
+    if isinstance(from_node, JoinNode):
+        cleaned_left, left_conds = _extract_where_conditions(from_node.left)
+        cleaned_right, right_conds = _extract_where_conditions(from_node.right)
+        new_join = replace(from_node, left=cleaned_left, right=cleaned_right)
+        return new_join, left_conds + right_conds
+    return from_node, []
+
+
 def _unpack_query(node: ASTNode):
+    limit = None
+    offset = None
     order_by = None
     distinct = False
     columns = None
     where_cond = None
     curr = node
+
+    if isinstance(curr, LimitNode):
+        limit = curr.limit
+        offset = curr.offset
+        curr = curr.child
 
     if isinstance(curr, SortNode):
         order_by = (curr.column, curr.direction)
@@ -65,13 +85,20 @@ def _unpack_query(node: ASTNode):
         where_cond = curr.condition
         curr = curr.child
 
-    from_node = curr
-    return columns, from_node, where_cond, order_by, distinct
+    from_node, extracted_conds = _extract_where_conditions(curr)
+    all_conds = ([where_cond] if where_cond is not None else []) + extracted_conds
+    if all_conds:
+        combined = all_conds[0]
+        for c in all_conds[1:]:
+            combined = AndNode(combined, c)
+        where_cond = combined
+
+    return columns, from_node, where_cond, order_by, distinct, limit, offset
 
 
 def ast_to_sql(node: ASTNode) -> str:
     """Render an ASTNode tree into a canonical SQL query string."""
-    columns, from_node, where_cond, order_by, distinct = _unpack_query(node)
+    columns, from_node, where_cond, order_by, distinct, limit, offset = _unpack_query(node)
 
     parts: list[str] = []
     col_str = ", ".join(columns) if columns else "*"
@@ -86,5 +113,10 @@ def ast_to_sql(node: ASTNode) -> str:
 
     if order_by is not None:
         parts.append(f"ORDER BY {order_by[0]} {order_by[1]}")
+
+    if limit is not None:
+        parts.append(f"LIMIT {limit}")
+        if offset:
+            parts.append(f"OFFSET {offset}")
 
     return " ".join(parts) + ";"

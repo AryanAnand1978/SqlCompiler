@@ -27,20 +27,45 @@ python -m pytest tests -q -p no:cacheprovider
 
 ## Supported SQL
 
-The v1 grammar supports `SELECT` (with optional `DISTINCT`, a column list or `*`), `FROM`, table aliases, `JOIN`/`INNER JOIN ... ON`, `WHERE` comparisons joined by `AND`/`OR`, and `ORDER BY ... ASC|DESC`; a trailing semicolon is optional. Keywords are case-insensitive. Supported comparison operators are `=`, `!=`, `<`, `>`, `<=`, and `>=`.
+The grammar supports:
+- `SELECT` with optional `DISTINCT`, column projections, or `*`
+- `FROM` with optional table aliases (`users u`)
+- Multi-table `JOIN` / `INNER JOIN ... ON` (supports multiple chained joins)
+- `WHERE` predicates with:
+  - Binary comparisons: `=`, `!=`, `<`, `>`, `<=`, `>=`
+  - Logical conjunctions: `AND`, `OR`
+  - Syntactic sugar: `x BETWEEN a AND b` (desugared to `x >= a AND x <= b`)
+  - Set membership: `x IN (val1, val2, ...)` (desugared to disjunction tree)
+- `ORDER BY ... ASC|DESC`
+- `LIMIT <int> [OFFSET <int>]` pagination
+- Trailing semicolon is optional; keywords are case-insensitive.
 
 Example:
 
 ```sql
-SELECT e.name, d.dept_name FROM employees e JOIN departments d ON e.dept_id = d.id WHERE e.salary > 60000 AND 1 = 1 ORDER BY e.salary DESC;
+SELECT e.name, d.dept_name, e.salary 
+FROM employees e 
+JOIN departments d ON e.dept_id = d.id 
+WHERE e.salary BETWEEN 50000 AND 90000 
+  AND d.dept_name IN ('Engineering', 'Product')
+ORDER BY e.salary DESC 
+LIMIT 5 OFFSET 0;
 ```
 
-## Architecture
+## Compiler Architecture & Optimization Pipeline
 
-`Lexer` produces tokens, `Parser` builds the canonical `Scan → [Join] → Filter → Project → Sort` AST, `optimize` repeatedly applies rewrite rules to a fixed point, and `generate_plan` creates `SeqScan`, `NestedLoopJoin`, `Filter`, `Project`, and `Sort` plan nodes. `print_tree` renders either tree for inspection.
+1. **Lexer (`sqlopt/lexer.py`)**: Tokenizes input SQL into classified tokens (`SELECT`, `JOIN`, `BETWEEN`, `IN`, `LIMIT`, etc.).
+2. **Parser (`sqlopt/parser.py`)**: Recursive-descent parser producing a canonical relational AST (`Scan → [Join] → Filter → Project → Sort → [Distinct] → [Limit]`). Performs early desugaring for `BETWEEN` and `IN`.
+3. **Optimizer Engine (`sqlopt/optimizer/`)**: Applies rule rewrites to a fixed point:
+   - **Constant Folding**: Eliminates tautologies (`1 = 1`, `col = col`) and folds literals (`1 = 0` to contradiction).
+   - **Redundant Filter Elimination**: Deduplicates repeated predicates (`A AND A` $\to$ `A`).
+   - **Predicate Pushdown**: Pushes filter conditions down past joins into scan inputs so rows are filtered *before* costly nested-loop joins.
+   - **Redundant Join Elimination**: Prunes unnecessary self-joins on primary keys when the duplicate join table provides no new columns.
+   - **Projection Pushdown**: Annotates scan nodes with only the columns needed by downstream filter, join, sort, and select operators, drastically cutting disk/memory I/O.
+4. **Planner & Cost Estimator (`sqlopt/planner.py`)**: Generates physical-like execution plan nodes (`SeqScan`, `NestedLoopJoin`, `Filter`, `Project`, `Sort`, `Distinct`, `Limit`) and calculates estimated cost based on table cardinalities and column widths.
+5. **In-Memory Executor (`sqlopt/executor.py`)**: Executes the optimized plan directly against the demo catalog tables (`users`, `orders`, `products`, `departments`, `employees`).
 
-Current rules fold literal comparisons / tautologies, eliminate duplicate `AND` predicates, prune redundant self-joins on primary keys (Redundant Join Elimination), annotate scans with columns needed by projection/filter/sort (Projection Pushdown), and estimate costs. Scan cost is proportional to rows × columns read, so the UI exposes the benefit of projection pushdown as a before/after percentage. Plan estimates use the row counts of the included demo tables; unknown tables default to 1,000 rows.
+## Deferred Work
 
-## Deferred work
+Subqueries and aggregate grouping (`GROUP BY`, `COUNT`, `SUM`, `AVG`) are planned for future iterations.
 
-Subqueries, grouping (`GROUP BY`), aggregates (`COUNT`, `SUM`), and `LIMIT` are intentionally outside v1.

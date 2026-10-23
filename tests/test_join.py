@@ -25,8 +25,10 @@ def test_aliased_join_optimizes_plans_and_executes():
     optimized, rules = optimize(original)
     assert "constant_folding (1x)" in rules
     assert "redundant_filter_elimination (1x)" in rules
+    assert "predicate_pushdown (1x)" in rules
     plan = generate_plan(optimized)
-    assert plan.children[0].children[0].operator == "NestedLoopJoin"
+    assert plan.children[0].operator == "NestedLoopJoin"
+    assert plan.children[0].children[0].operator == "Filter"
     assert execute(optimized) == [
         {"u.name": "Aarav", "o.amount": 1200},
         {"u.name": "Kabir", "o.amount": 2200},

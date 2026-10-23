@@ -1,6 +1,6 @@
 from dataclasses import replace
 from typing import Any
-from ..ast_nodes import AndNode, ASTNode, BooleanNode, Condition, ConditionNode, DistinctNode, FilterNode, JoinNode, OrNode, ProjectNode, ScanNode, SortNode, StringLiteral
+from ..ast_nodes import AndNode, ASTNode, BooleanNode, Condition, ConditionNode, DistinctNode, FilterNode, JoinNode, LimitNode, OrNode, ProjectNode, ScanNode, SortNode, StringLiteral
 
 
 class RuleResult(tuple):
@@ -43,6 +43,7 @@ def _rewrite_children(node: ASTNode, transform):
     if isinstance(node, ProjectNode): return replace(node, child=transform(node.child))
     if isinstance(node, SortNode): return replace(node, child=transform(node.child))
     if isinstance(node, DistinctNode): return replace(node, child=transform(node.child))
+    if isinstance(node, LimitNode): return replace(node, child=transform(node.child))
     if isinstance(node, JoinNode): return replace(node, left=transform(node.left), right=transform(node.right))
     return node
 
@@ -112,9 +113,73 @@ def _and_predicates(condition: Condition) -> list[Condition]:
     return [_deduplicate(condition)]
 
 
+def _table_prefixes(node: ASTNode) -> set[str]:
+    names: set[str] = set()
+    if isinstance(node, ScanNode):
+        if node.alias: names.add(node.alias)
+        names.add(node.table)
+    elif isinstance(node, JoinNode):
+        names |= _table_prefixes(node.left)
+        names |= _table_prefixes(node.right)
+    elif hasattr(node, "child"):
+        names |= _table_prefixes(getattr(node, "child"))
+    return names
+
+
+def _combine_and(predicates: list[Condition]) -> Condition:
+    res = predicates[0]
+    for p in predicates[1:]:
+        res = AndNode(res, p)
+    return res
+
+
 def predicate_pushdown(node: ASTNode) -> RuleResult:
-    """No-op in v1: with only scans, filters are already at the lowest valid point."""
-    return RuleResult(node, False, None)
+    """Pushes filter predicates down through JoinNodes into matching left/right branches."""
+    changed_id = None
+
+    def _transform(curr: ASTNode) -> ASTNode:
+        nonlocal changed_id
+        if isinstance(curr, JoinNode):
+            left = _transform(curr.left)
+            right = _transform(curr.right)
+            curr = replace(curr, left=left, right=right)
+        elif hasattr(curr, "child"):
+            curr = replace(curr, child=_transform(curr.child))
+
+        if isinstance(curr, FilterNode) and isinstance(curr.child, JoinNode):
+            join = curr.child
+            left_tables = _table_prefixes(join.left)
+            right_tables = _table_prefixes(join.right)
+
+            preds = _and_predicates(curr.condition)
+            left_preds = []
+            right_preds = []
+            remain_preds = []
+
+            for p in preds:
+                cols = _condition_columns(p)
+                prefixes = {c.split(".")[0] for c in cols if "." in c}
+                if prefixes and prefixes.issubset(left_tables):
+                    left_preds.append(p)
+                elif prefixes and prefixes.issubset(right_tables):
+                    right_preds.append(p)
+                else:
+                    remain_preds.append(p)
+
+            if left_preds or right_preds:
+                changed_id = curr.node_id
+                new_left = FilterNode(_combine_and(left_preds), join.left) if left_preds else join.left
+                new_right = FilterNode(_combine_and(right_preds), join.right) if right_preds else join.right
+                new_join = replace(join, left=new_left, right=new_right)
+                if remain_preds:
+                    return replace(curr, condition=_combine_and(remain_preds), child=new_join)
+                return new_join
+
+        return curr
+
+    rewritten = _transform(node)
+    applied = rewritten != node
+    return RuleResult(rewritten, applied, changed_id)
 
 
 def _collect_scans(node: ASTNode) -> dict[str, ScanNode]:
@@ -155,7 +220,7 @@ def _collect_used_prefixes(node: ASTNode, skip_node_id: int | None = None) -> se
             if "." in curr.column:
                 used.add(curr.column.split(".")[0])
             _walk(curr.child)
-        elif isinstance(curr, DistinctNode):
+        elif isinstance(curr, (DistinctNode, LimitNode)):
             _walk(curr.child)
         elif isinstance(curr, JoinNode):
             if curr.node_id != skip_node_id:
@@ -227,7 +292,7 @@ def projection_pushdown(node: ASTNode) -> RuleResult:
 
 def _find_project(node: ASTNode) -> ProjectNode | None:
     if isinstance(node, ProjectNode): return node
-    if isinstance(node, (FilterNode, SortNode, DistinctNode)): return _find_project(node.child)
+    if isinstance(node, (FilterNode, SortNode, DistinctNode, LimitNode)): return _find_project(node.child)
     if isinstance(node, JoinNode): return _find_project(node.left) or _find_project(node.right)
     return None
 
@@ -237,7 +302,7 @@ def _collect_required(node: ASTNode, required: set[str]) -> None:
         required.update(_condition_columns(node.condition)); _collect_required(node.child, required)
     elif isinstance(node, SortNode):
         required.add(node.column); _collect_required(node.child, required)
-    elif isinstance(node, (ProjectNode, DistinctNode)): _collect_required(node.child, required)
+    elif isinstance(node, (ProjectNode, DistinctNode, LimitNode)): _collect_required(node.child, required)
     elif isinstance(node, JoinNode):
         required.update(_condition_columns(node.condition)); _collect_required(node.left, required); _collect_required(node.right, required)
 

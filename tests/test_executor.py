@@ -57,8 +57,36 @@ def test_executes_employees_and_departments_join():
 def test_executes_select_distinct():
     rows = run("SELECT DISTINCT city FROM users WHERE active = 1 AND active = 1;")
     cities = [r["city"] for r in rows]
-    # In USERS, active=1 cities with duplicates include Delhi (Aarav, Ananya, Sara), Mumbai (Diya), etc.
-    # DISTINCT must return each unique city exactly once.
     assert len(cities) == len(set(cities))
     assert set(cities) == {"Delhi", "Mumbai", "Pune", "Chennai", "Bengaluru"}
+
+
+def test_executes_between_and_in_predicates():
+    # BETWEEN: age >= 18 AND age <= 24 -> Aarav (24), Vivaan (19), Meera (22)
+    rows_between = run("SELECT name, age FROM users WHERE age BETWEEN 18 AND 24 ORDER BY age ASC;")
+    assert [r["name"] for r in rows_between] == ["Vivaan", "Meera", "Aarav"]
+
+    # IN: category IN ('Books', 'Furniture')
+    rows_in = run("SELECT name, category FROM products WHERE category IN ('Books', 'Furniture');")
+    assert len(rows_in) == 5
+    assert all(r["category"] in ("Books", "Furniture") for r in rows_in)
+
+
+def test_executes_limit_and_offset():
+    # LIMIT: top 3 highest paid employees
+    rows_limit = run("SELECT name, salary FROM employees ORDER BY salary DESC LIMIT 3;")
+    assert len(rows_limit) == 3
+    assert [r["name"] for r in rows_limit] == ["Karan", "Aditi", "Priya"]
+
+    # LIMIT + OFFSET: skip 2, take 2
+    rows_offset = run("SELECT name, salary FROM employees ORDER BY salary DESC LIMIT 2 OFFSET 2;")
+    assert len(rows_offset) == 2
+    assert [r["name"] for r in rows_offset] == ["Priya", "Vikram"]
+
+
+def test_executes_predicate_pushdown_through_join():
+    rows = run("SELECT u.name, o.amount FROM users u JOIN orders o ON u.id = o.user_id WHERE u.age > 25 AND o.amount > 1000;")
+    assert len(rows) == 2
+    assert all(r["o.amount"] > 1000 for r in rows)
+
 

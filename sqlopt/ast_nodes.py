@@ -84,3 +84,11 @@ class SortNode(ASTNode):
 class DistinctNode(ASTNode):
     child: ASTNode
 
+
+@dataclass(frozen=True)
+class LimitNode(ASTNode):
+    limit: int
+    offset: int
+    child: ASTNode
+
+

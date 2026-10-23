@@ -13,12 +13,15 @@ from sqlopt.utils.tree_printer import print_tree, print_tree_highlighted
 
 EXAMPLES = {
     # 1. Joins & Multi-Table Relations
+    "Join: Predicate Pushdown through Join": "SELECT u.name, o.amount FROM users u JOIN orders o ON u.id = o.user_id WHERE u.age > 25 AND o.amount > 1000;",
     "Join: Redundant Self-Join Elimination (Join Pruning)": "SELECT u.name, o.amount FROM users u JOIN orders o ON u.id = o.user_id JOIN users u2 ON u.id = u2.id WHERE o.status = 'shipped';",
     "Join: Employees & Departments (Filtered + Sorted)": "SELECT e.name, d.dept_name, e.salary FROM employees e JOIN departments d ON e.dept_id = d.id WHERE e.salary > 60000 ORDER BY e.salary DESC;",
     "Join: All Rules Fired (Join + Tautology + Duplicates + Projection)": "SELECT e.name, d.dept_name, e.salary FROM employees e JOIN departments d ON e.dept_id = d.id WHERE e.salary > 50000 AND 1 = 1 AND e.salary > 50000 ORDER BY e.salary DESC;",
     "Join: Users & Orders (Status filter + Tautology)": "SELECT u.name, o.amount FROM users u JOIN orders o ON u.id = o.user_id WHERE u.age > 18 AND o.status = 'shipped' AND 1 = 1 AND u.age > 18;",
 
     # 2. Edge Cases in Boolean Predicates & Constant Folding
+    "Edge Case: Syntactic Sugar (BETWEEN Predicate)": "SELECT name, age FROM users WHERE age BETWEEN 18 AND 30 ORDER BY age ASC;",
+    "Edge Case: Syntactic Sugar (IN List Predicate)": "SELECT name, category, price FROM products WHERE category IN ('Books', 'Furniture') ORDER BY price ASC;",
     "Edge Case: Duplicate Elimination (SELECT DISTINCT)": "SELECT DISTINCT city FROM users WHERE active = 1 AND active = 1;",
     "Edge Case: Contradiction / Dead Predicate (1 = 0)": "SELECT name, price FROM products WHERE price > 1000 AND 1 = 0;",
     "Edge Case: Tautology Elimination (1 = 1)": "SELECT name, age FROM users WHERE age > 18 AND age > 18 AND 1 = 1;",
@@ -31,7 +34,9 @@ EXAMPLES = {
     "Edge Case: Wildcard (SELECT *) — Proves Pushdown is Safely Skipped": "SELECT * FROM products WHERE stock > 0;",
     "Edge Case: Filtered Column Not in SELECT List": "SELECT name FROM products WHERE price > 5000;",
 
-    # 4. Sorting & Filter Queries
+    # 4. Sorting, Limit & Pagination
+    "Limit: Top 3 Highest Paid Employees": "SELECT name, salary FROM employees ORDER BY salary DESC LIMIT 3;",
+    "Limit: Paged Results (LIMIT 2 OFFSET 2)": "SELECT name, salary FROM employees ORDER BY salary DESC LIMIT 2 OFFSET 2;",
     "Sort: Products by Price Descending": "SELECT name, category, price FROM products WHERE stock > 0 ORDER BY price DESC;",
     "Sort: Shipped Orders by Amount": "SELECT id, user_id, amount FROM orders WHERE status = 'shipped' ORDER BY amount DESC;",
     "Filter: Adult Active Users": "SELECT name, city, age FROM users WHERE active = 1 AND age >= 18 ORDER BY age ASC;",
@@ -52,7 +57,7 @@ sql = st.text_area("SQL query", value=st.session_state.get("sql", EXAMPLES[selec
 with st.expander("📖 Grammar (EBNF), Supported Syntax, and Demo Catalog"):
     st.markdown("### Grammar (EBNF)")
     st.code(
-        """query        := "SELECT" ["DISTINCT"] column_list "FROM" table_name [alias] [join_clause]* [where_clause] [order_clause] ";"
+        """query        := "SELECT" ["DISTINCT"] column_list "FROM" table_name [alias] [join_clause]* [where_clause] [order_clause] [limit_clause] ";"
 column_list  := "*" | column ("," column)*
 column       := IDENTIFIER ["." IDENTIFIER]
 table_name   := IDENTIFIER
@@ -60,14 +65,15 @@ alias        := IDENTIFIER
 join_clause  := ["INNER"] "JOIN" table_name [alias] "ON" condition
 where_clause := "WHERE" condition
 condition    := comparison (("AND" | "OR") comparison)*
-comparison   := operand comp_op operand
+comparison   := operand comp_op operand | operand "BETWEEN" operand "AND" operand | operand "IN" "(" operand ("," operand)* ")"
 operand      := IDENTIFIER ["." IDENTIFIER] | NUMBER | STRING
 comp_op      := "=" | "!=" | "<" | ">" | "<=" | ">="
-order_clause := "ORDER" "BY" column ["ASC" | "DESC"]""",
+order_clause := "ORDER" "BY" column ["ASC" | "DESC"]
+limit_clause := "LIMIT" NUMBER ["OFFSET" NUMBER]""",
         language="text",
     )
     st.markdown("### Supported Syntax Summary")
-    st.code("SELECT [DISTINCT] column[, ...] | * FROM table [alias] [INNER] JOIN table [alias] ON comparison [WHERE comparison (AND|OR comparison)*] [ORDER BY column ASC|DESC];", language="sql")
+    st.code("SELECT [DISTINCT] column[, ...] | * FROM table [alias] [INNER] JOIN table [alias] ON condition [WHERE condition] [ORDER BY column ASC|DESC] [LIMIT n [OFFSET m]];", language="sql")
     st.markdown("### Demo Database Catalog")
     st.write("The database catalog includes **5 tables** with varying schemas and record sizes:")
     catalog_rows = [

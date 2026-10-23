@@ -1,6 +1,6 @@
 """In-memory executor for the v1 logical AST."""
 
-from .ast_nodes import AndNode, ASTNode, BooleanNode, ConditionNode, DistinctNode, FilterNode, JoinNode, OrNode, ProjectNode, ScanNode, SortNode, StringLiteral
+from .ast_nodes import AndNode, ASTNode, BooleanNode, ConditionNode, DistinctNode, FilterNode, JoinNode, LimitNode, OrNode, ProjectNode, ScanNode, SortNode, StringLiteral
 from .sample_data.tables import TABLES
 
 
@@ -47,6 +47,11 @@ def execute(ast: ASTNode, tables: dict[str, list[dict]] | None = None) -> list[d
         rows = execute(ast.child, tables)
         _validate_columns((ast.column,), rows)
         return sorted(rows, key=lambda row: row[ast.column], reverse=ast.direction == "DESC")
+    if isinstance(ast, LimitNode):
+        rows = execute(ast.child, tables)
+        start = ast.offset
+        end = start + ast.limit
+        return rows[start:end]
     raise TypeError(f"unsupported AST node: {type(ast).__name__}")
 
 
